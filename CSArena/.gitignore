@@ -1,0 +1,62 @@
+# Archivos generados por Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Mm]emoryCaptures/
+
+# Archivos de usuario
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.opendb
+*.VC.db
+
+# Archivos de compilación de VSCode y Rider
+.vscode/
+.idea/
+*.code-workspace
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración específicos del editor
+*.bak
+*.swp
+*.orig
+*.winmd
+
+# Archivos de Unity específicos de la plataforma
+ExportedObj/
+*.apk
+*.aab
+*.unitypackage
+*.manifest
+
+# Archivos específicos del sistema operativo
+.DS_Store
+*.class
+*.log
+*.swp
+*.iml
+
+# Archivos de control de versiones de Unity Collaborate
+/[Uu]ser[Ss]ettings/
+
+# Si usas paquetes personalizados
+/Packages/*/package.json.meta
+
+# Archivos creados por JetBrains Rider
+.idea/
+*.sln.iml
