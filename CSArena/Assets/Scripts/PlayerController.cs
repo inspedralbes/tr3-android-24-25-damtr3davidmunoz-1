@@ -3,7 +3,17 @@ using UnityEngine;
 
 public class PlayerController : NetworkBehaviour
 {
-    public float speed = 5f;
+    private float _speed = 5f;
+    public float Speed 
+    {
+        get => _speed;
+        set 
+        {
+            _speed = value;
+            Debug.Log($"Velocidad actualizada a: {_speed}");
+        }
+    }
+    
     public GameObject bulletPrefab;
     public float bulletSpeed = 10f;
 
@@ -11,8 +21,8 @@ public class PlayerController : NetworkBehaviour
     {
         if (!IsOwner) return;
 
-        float moveX = Input.GetAxis("Horizontal") * speed * Time.deltaTime;
-        float moveY = Input.GetAxis("Vertical") * speed * Time.deltaTime;
+        float moveX = Input.GetAxis("Horizontal") * Speed * Time.deltaTime;
+        float moveY = Input.GetAxis("Vertical") * Speed * Time.deltaTime;
         transform.Translate(new Vector3(moveX, moveY, 0));
 
         if (Input.GetMouseButtonDown(0))
@@ -37,7 +47,14 @@ public class PlayerController : NetworkBehaviour
         bulletRb.linearVelocity = direction * bulletSpeed;
 
         bullet.GetComponent<BulletController>().owner = gameObject;
-
         bullet.GetComponent<NetworkObject>().Spawn();
+        
+        Destroy(bullet, 3f);
+    }
+
+    [ClientRpc]
+    public void UpdateSpeedClientRpc(float newSpeed)
+    {
+        Speed = newSpeed;
     }
 }
