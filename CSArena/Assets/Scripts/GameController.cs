@@ -13,6 +13,8 @@ public class GameController : MonoBehaviour
     private static GameController _instance;
     public static GameController Instance => _instance;
 
+    private Material circleMaskMaterial;
+
     private void Awake()
     {
         if (_instance != null && _instance != this)
@@ -24,6 +26,10 @@ public class GameController : MonoBehaviour
             _instance = this;
             DontDestroyOnLoad(this.gameObject);
         }
+
+        circleMaskMaterial = new Material(Shader.Find("Custom/CircleMask"));
+        circleMaskMaterial.SetFloat("_Radius", 0.5f);
+        circleMaskMaterial.SetFloat("_Softness", 0.05f);
     }
 
     async void Start()
@@ -105,13 +111,13 @@ public class GameController : MonoBehaviour
         reconnectAttempts++;
         Debug.Log($"Intentando reconectar... Intento {reconnectAttempts}");
 
-        await Task.Delay(1000 * reconnectAttempts); // Espera progresiva
+        await Task.Delay(1000 * reconnectAttempts);
         await Connect();
     }
 
     private void UpdateAllPlayersSpeed(float newSpeed)
     {
-        PlayerController[] players = FindObjectsOfType<PlayerController>();
+        PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
         Debug.Log($"Encontrados {players.Length} jugadores para actualizar");
         
         foreach (PlayerController player in players)
@@ -133,38 +139,58 @@ public class GameController : MonoBehaviour
     }
 
     private IEnumerator DownloadImage(string imageUrl)
+{
+    using (UnityWebRequest webRequest = UnityWebRequestTexture.GetTexture(imageUrl))
     {
-        using (UnityWebRequest webRequest = UnityWebRequestTexture.GetTexture(imageUrl))
-        {
-            yield return webRequest.SendWebRequest();
+        yield return webRequest.SendWebRequest();
 
-            if (webRequest.result == UnityWebRequest.Result.Success)
+        if (webRequest.result == UnityWebRequest.Result.Success)
+        {
+            Texture2D texture = DownloadHandlerTexture.GetContent(webRequest);
+            
+            float aspectRatio = (float)texture.width / texture.height;
+            circleMaskMaterial.SetFloat("_AspectRatio", aspectRatio);
+            
+            Sprite sprite = Sprite.Create(
+                texture, 
+                new Rect(0, 0, texture.width, texture.height), 
+                new Vector2(0.5f, 0.5f)
+            );
+            
+            PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
+            foreach (PlayerController player in players)
             {
-                Texture2D texture = DownloadHandlerTexture.GetContent(webRequest);
-                Sprite sprite = Sprite.Create(
-                    texture, 
-                    new Rect(0, 0, texture.width, texture.height), 
-                    new Vector2(0.5f, 0.5f)
-                );
-                
-                PlayerController[] players = FindObjectsOfType<PlayerController>();
-                foreach (PlayerController player in players)
+                SpriteRenderer renderer = player.GetComponent<SpriteRenderer>();
+                if (renderer != null)
                 {
-                    player.GetComponent<SpriteRenderer>().sprite = sprite;
+                    renderer.sprite = sprite;
+                    renderer.material = circleMaskMaterial;
+                    
+                    CircleCollider2D collider = player.GetComponent<CircleCollider2D>();
+                    if (collider != null)
+                    {
+                        collider.radius = sprite.bounds.extents.magnitude * 0.5f;
+                    }
                 }
             }
-            else
-            {
-                Debug.LogError("Error al cargar imagen: " + webRequest.error);
-            }
+        }
+        else
+        {
+            Debug.LogError("Error al cargar imagen: " + webRequest.error);
         }
     }
+}
 
     async void OnDestroy()
     {
         if (ws != null && ws.State == WebSocketState.Open)
         {
             await ws.Close();
+        }
+
+        if (circleMaskMaterial != null)
+        {
+            Destroy(circleMaskMaterial);
         }
     }
 
