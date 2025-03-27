@@ -86,7 +86,7 @@ public class PlayerController : NetworkBehaviour
         bullet.GetComponent<BulletController>().owner = gameObject;
         bullet.GetComponent<NetworkObject>().Spawn();
         
-        Destroy(bullet, 3f);
+        Destroy(bullet, 60f);
     }
 
     [ClientRpc]

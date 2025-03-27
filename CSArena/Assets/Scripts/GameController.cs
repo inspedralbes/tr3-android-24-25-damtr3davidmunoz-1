@@ -8,8 +8,8 @@ public class GameController : MonoBehaviour
 {
     private WebSocket ws;
     public float playerSpeed = 5f;
-    public SpriteRenderer playerSpriteRenderer;
-
+    public Sprite defaultPlayerSprite;
+    
     private static GameController _instance;
     public static GameController Instance => _instance;
 
@@ -19,13 +19,12 @@ public class GameController : MonoBehaviour
     {
         if (_instance != null && _instance != this)
         {
-            Destroy(this.gameObject);
+            Destroy(gameObject);
+            return;
         }
-        else
-        {
-            _instance = this;
-            DontDestroyOnLoad(this.gameObject);
-        }
+        
+        _instance = this;
+        DontDestroyOnLoad(gameObject);
 
         circleMaskMaterial = new Material(Shader.Find("Custom/CircleMask"));
         circleMaskMaterial.SetFloat("_Radius", 0.5f);
@@ -34,48 +33,183 @@ public class GameController : MonoBehaviour
 
     async void Start()
     {
+        await LoadLastPlayerImage();
+        
+        await InitializeWebSocket();
+    }
+
+    private async Task LoadLastPlayerImage()
+    {
+        string url = "http://localhost:3000/api/last-player-image";
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            await request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<ImageResponse>(request.downloadHandler.text);
+                if (response.success && !string.IsNullOrEmpty(response.imageUrl))
+                {
+                    await DownloadAndApplyImage(response.imageUrl);
+                }
+                else
+                {
+                    ApplyDefaultSprite();
+                }
+            }
+            else
+            {
+                Debug.LogError("Error loading last image: " + request.error);
+                ApplyDefaultSprite();
+            }
+        }
+    }
+
+    private async Task DownloadAndApplyImage(string imageUrl)
+    {
+        using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(imageUrl))
+        {
+            await request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                Texture2D texture = DownloadHandlerTexture.GetContent(request);
+                
+                float aspectRatio = (float)texture.width / texture.height;
+                circleMaskMaterial.SetFloat("_AspectRatio", aspectRatio);
+                
+                Sprite sprite = Sprite.Create(
+                    texture, 
+                    new Rect(0, 0, texture.width, texture.height), 
+                    new Vector2(0.5f, 0.5f)
+                );
+                
+                PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
+                foreach (PlayerController player in players)
+                {
+                    SpriteRenderer renderer = player.GetComponent<SpriteRenderer>();
+                    if (renderer != null)
+                    {
+                        renderer.sprite = sprite;
+                        renderer.material = circleMaskMaterial;
+                        
+                        CircleCollider2D collider = player.GetComponent<CircleCollider2D>();
+                        if (collider != null)
+                        {
+                            collider.radius = sprite.bounds.extents.magnitude * 0.5f;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Debug.LogError("Error downloading image: " + request.error);
+                ApplyDefaultSprite();
+            }
+        }
+    }
+
+    private void ApplyDefaultSprite()
+    {
+        if (defaultPlayerSprite != null)
+        {
+            PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
+            foreach (PlayerController player in players)
+            {
+                SpriteRenderer renderer = player.GetComponent<SpriteRenderer>();
+                if (renderer != null)
+                {
+                    renderer.sprite = defaultPlayerSprite;
+                    renderer.material = circleMaskMaterial;
+                }
+            }
+        }
+    }
+
+    private async Task InitializeWebSocket()
+    {
         ws = new WebSocket("ws://localhost:3000");
 
-        ws.OnOpen += () =>
+        ws.OnOpen += () => 
         {
-            Debug.Log("Conexión WebSocket establecida");
+            Debug.Log("WebSocket connected");
             ws.SendText("get-speed");
         };
 
         ws.OnMessage += (bytes) =>
         {
             var message = System.Text.Encoding.UTF8.GetString(bytes);
-            Debug.Log("Mensaje recibido: " + message);
-
-            var data = JsonUtility.FromJson<WebSocketMessage>(message);
-            if (data.type == "player-speed-updated")
-            {
-                playerSpeed = data.speed;
-                Debug.Log("Nueva velocidad recibida: " + playerSpeed);
-                UpdateAllPlayersSpeed(playerSpeed);
-            }
-            else if (data.type == "player-image-updated")
-            {
-                Debug.Log("Nueva imagen recibida: " + data.imageUrl);
-                LoadPlayerImage(data.imageUrl);
-            }
+            HandleWebSocketMessage(message);
         };
 
-        ws.OnClose += (e) =>
+        ws.OnClose += (e) => 
         {
-            Debug.Log("Conexión WebSocket cerrada: " + e);
+            Debug.Log("WebSocket closed: " + e);
             Reconnect();
         };
 
-        ws.OnError += (e) =>
+        ws.OnError += (e) => 
         {
-            Debug.LogError("Error en WebSocket: " + e);
+            Debug.LogError("WebSocket error: " + e);
         };
 
-        await Connect();
+        await ConnectWebSocket();
     }
 
-    async Task Connect()
+    private void HandleWebSocketMessage(string message)
+    {
+        try
+        {
+            var data = JsonUtility.FromJson<WebSocketMessage>(message);
+            
+            switch (data.type)
+            {
+                case "player-speed-updated":
+                    playerSpeed = data.speed;
+                    UpdateAllPlayersSpeed(playerSpeed);
+                    break;
+                    
+                case "player-image-updated":
+                    _ = DownloadAndApplyImageAsync(data.imageUrl);
+                    break;
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError("Error processing message: " + e.Message);
+        }
+    }
+
+    private async Task DownloadAndApplyImageAsync(string imageUrl)
+    {
+        try
+        {
+            await DownloadAndApplyImage(imageUrl);
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError("Error downloading image: " + ex.Message);
+            ApplyDefaultSprite();
+        }
+    }
+
+    private void UpdateAllPlayersSpeed(float newSpeed)
+    {
+        PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
+        foreach (var player in players)
+        {
+            if (player.IsServer)
+            {
+                player.UpdateSpeedClientRpc(newSpeed);
+            }
+            else
+            {
+                player.Speed = newSpeed;
+            }
+        }
+    }
+
+    private async Task ConnectWebSocket()
     {
         try
         {
@@ -83,7 +217,16 @@ public class GameController : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogError("Error al conectar: " + e.Message);
+            Debug.LogError("Connection error: " + e.Message);
+        }
+    }
+
+    private async void Reconnect()
+    {
+        await Task.Delay(5000);
+        if (ws != null && ws.State != WebSocketState.Open)
+        {
+            await ws.Connect();
         }
     }
 
@@ -97,100 +240,11 @@ public class GameController : MonoBehaviour
 #endif
     }
 
-    private int reconnectAttempts = 0;
-    private const int maxReconnectAttempts = 5;
-
-    async void Reconnect()
-    {
-        if (reconnectAttempts >= maxReconnectAttempts)
-        {
-            Debug.LogError("Máximo de intentos de reconexión alcanzado");
-            return;
-        }
-
-        reconnectAttempts++;
-        Debug.Log($"Intentando reconectar... Intento {reconnectAttempts}");
-
-        await Task.Delay(1000 * reconnectAttempts);
-        await Connect();
-    }
-
-    private void UpdateAllPlayersSpeed(float newSpeed)
-    {
-        PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
-        Debug.Log($"Encontrados {players.Length} jugadores para actualizar");
-        
-        foreach (PlayerController player in players)
-        {
-            if (player.IsServer)
-            {
-                player.UpdateSpeedClientRpc(newSpeed);
-            }
-            else
-            {
-                player.Speed = newSpeed;
-            }
-        }
-    }
-
-    private void LoadPlayerImage(string imageUrl)
-    {
-        StartCoroutine(DownloadImage(imageUrl));
-    }
-
-    private IEnumerator DownloadImage(string imageUrl)
-{
-    using (UnityWebRequest webRequest = UnityWebRequestTexture.GetTexture(imageUrl))
-    {
-        yield return webRequest.SendWebRequest();
-
-        if (webRequest.result == UnityWebRequest.Result.Success)
-        {
-            Texture2D texture = DownloadHandlerTexture.GetContent(webRequest);
-            
-            float aspectRatio = (float)texture.width / texture.height;
-            circleMaskMaterial.SetFloat("_AspectRatio", aspectRatio);
-            
-            Sprite sprite = Sprite.Create(
-                texture, 
-                new Rect(0, 0, texture.width, texture.height), 
-                new Vector2(0.5f, 0.5f)
-            );
-            
-            PlayerController[] players = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
-            foreach (PlayerController player in players)
-            {
-                SpriteRenderer renderer = player.GetComponent<SpriteRenderer>();
-                if (renderer != null)
-                {
-                    renderer.sprite = sprite;
-                    renderer.material = circleMaskMaterial;
-                    
-                    CircleCollider2D collider = player.GetComponent<CircleCollider2D>();
-                    if (collider != null)
-                    {
-                        collider.radius = sprite.bounds.extents.magnitude * 0.5f;
-                    }
-                }
-            }
-        }
-        else
-        {
-            Debug.LogError("Error al cargar imagen: " + webRequest.error);
-        }
-    }
-}
-
     async void OnDestroy()
     {
         if (ws != null && ws.State == WebSocketState.Open)
         {
             await ws.Close();
-        }
-
-        if (circleMaskMaterial != null)
-        {
-            Destroy(circleMaskMaterial);
         }
     }
 
@@ -199,6 +253,13 @@ public class GameController : MonoBehaviour
     {
         public string type;
         public float speed;
+        public string imageUrl;
+    }
+
+    [System.Serializable]
+    private class ImageResponse
+    {
+        public bool success;
         public string imageUrl;
     }
 }
