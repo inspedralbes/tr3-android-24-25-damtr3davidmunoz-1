@@ -1,0 +1,10 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <Style src="project://database/Assets/Menus/NewUSSFile.uss?fileID=7433441132597879392&amp;guid=ddfac97aa8bb9220f9a4ed3d0884f706&amp;type=3#NewUSSFile" />
+    <ui:VisualElement class="menu-container">
+        <ui:Label text="PVP ARENA" class="title" />
+        <ui:VisualElement class="button-container">
+            <ui:Button name="create-game-button" text="CREAR PARTIDA" class="menu-button" />
+            <ui:Button name="join-game-button" text="UNIRSE A PARTIDA" class="menu-button" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>
