@@ -7,7 +7,7 @@ using System.Net;
 using System.Net.Sockets;
 using UnityEngine.SceneManagement;
 
-public class OnlineMatchmaker : MonoBehaviour
+public class OnlineMatchmaker : NetworkBehaviour
 {
     [Header("UI Configuration")]
     [SerializeField] private UIDocument menuUI;
@@ -15,115 +15,54 @@ public class OnlineMatchmaker : MonoBehaviour
     [Header("Server Configuration")]
     [SerializeField] private string serverUrl = "ws://localhost:3000";
     
+    [Header("Network Configuration")]
+    [SerializeField] private NetworkManager networkManagerPrefab;
+    [SerializeField] private GameObject playerPrefab;
+    
     private WebSocket webSocket;
-    private NetworkManager netManager;
     private bool isConnecting = false;
+    private NetworkManager spawnedNetworkManager;
+    private string currentRoomCode;
 
     private void Awake()
     {
-        // Verificar primero si menuUI está asignado
-        if (menuUI == null)
-        {
-            Debug.LogError("UIDocument no asignado en el Inspector. Buscando automáticamente...");
-            menuUI = FindObjectOfType<UIDocument>();
-            
-            if (menuUI == null)
-            {
-                Debug.LogError("No se encontró UIDocument en la escena. Asigna manualmente en el Inspector.");
-                return;
-            }
-        }
+        if (menuUI == null) menuUI = GetComponent<UIDocument>();
+    }
 
-        netManager = NetworkManager.Singleton;
-        
-        if (netManager == null)
-        {
-            Debug.LogError("NetworkManager no encontrado en la escena.");
-            return;
-        }
-
-        // Configura el transporte por defecto
-        var transport = netManager.GetComponent<UnityTransport>();
-        if (transport != null)
-        {
-            transport.SetConnectionData("0.0.0.0", 7777);
-        }
-        else
-        {
-            Debug.LogError("UnityTransport no encontrado en NetworkManager.");
-        }
-        
+    private void Start()
+    {
         SetupUI();
     }
 
     private void SetupUI()
     {
-        if (menuUI == null || menuUI.rootVisualElement == null)
-        {
-            Debug.LogError("No se puede configurar UI - UIDocument o rootVisualElement es null");
-            return;
-        }
+        if (menuUI == null || menuUI.rootVisualElement == null) return;
 
         var root = menuUI.rootVisualElement;
         
-        try
+        var createButton = root.Q<Button>("createButton");
+        if (createButton != null)
         {
-            // Botón Crear Partida
-            var createButton = root.Q<Button>("createButton");
-            if (createButton != null)
-            {
-                createButton.clicked += () => {
-                    if (!isConnecting) {
-                        var joinPanel = root.Q<VisualElement>("joinPanel");
-                        if (joinPanel != null) joinPanel.AddToClassList("hidden");
-                        CreateGame();
-                    }
-                };
-            }
-            else
-            {
-                Debug.LogError("Botón 'createButton' no encontrado en la UI");
-            }
-            
-            // Botón Unirse a Partida
-            var joinButton = root.Q<Button>("joinButton");
-            if (joinButton != null)
-            {
-                joinButton.clicked += () => {
-                    var joinPanel = root.Q<VisualElement>("joinPanel");
-                    if (joinPanel != null) joinPanel.RemoveFromClassList("hidden");
-                };
-            }
-            else
-            {
-                Debug.LogError("Botón 'joinButton' no encontrado en la UI");
-            }
-            
-            // Confirmar Unión
-            var confirmButton = root.Q<Button>("confirmJoinButton");
-            if (confirmButton != null)
-            {
-                confirmButton.clicked += () => {
-                    if (!isConnecting) {
-                        var codeInput = root.Q<TextField>("codeInput");
-                        if (codeInput != null && !string.IsNullOrEmpty(codeInput.value)) {
-                            JoinGame(codeInput.value);
-                        }
-                        else
-                        {
-                            Debug.Log("Por favor ingresa un código válido");
-                        }
-                    }
-                };
-            }
-            else
-            {
-                Debug.LogError("Botón 'confirmJoinButton' no encontrado en la UI");
-            }
+            createButton.clicked += () => {
+                if (!isConnecting) CreateGame();
+            };
         }
-        catch (System.Exception e)
+        
+        var joinButton = root.Q<Button>("joinButton");
+        if (joinButton != null)
         {
-            Debug.LogError($"Error configurando UI: {e.Message}");
+            joinButton.clicked += () => {
+                root.Q<VisualElement>("joinPanel").RemoveFromClassList("hidden");
+            };
+        }
+        
+        var confirmJoinButton = root.Q<Button>("confirmJoinButton");
+        if (confirmJoinButton != null)
+        {
+            confirmJoinButton.clicked += () => {
+                string code = root.Q<TextField>("codeInput").value;
+                if (!isConnecting && !string.IsNullOrEmpty(code)) JoinGame(code);
+            };
         }
     }
 
@@ -132,68 +71,59 @@ public class OnlineMatchmaker : MonoBehaviour
         if (isConnecting) return;
         
         isConnecting = true;
-        Debug.Log("Intentando crear partida...");
+        Debug.Log("Iniciando creación de partida...");
+
+        InitializeNetworkConnection();
         
-        try
-        {
-            webSocket = new WebSocket(serverUrl);
+        // Configurar el NetworkManager para manejar escenas
+        NetworkManager.Singleton.SceneManager.SetClientSynchronizationMode(LoadSceneMode.Single);
+        
+        webSocket = new WebSocket(serverUrl);
+        
+        webSocket.OnOpen += (sender, e) => {
+            Debug.Log("Conexión WebSocket establecida (Host)");
             
-            webSocket.OnOpen += (sender, e) => {
-                Debug.Log("Conexión WebSocket establecida (Host)");
+            MainThreadDispatcher.Run(() => {
+                var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
                 string ip = GetLocalIP();
-                ushort port = netManager.GetComponent<UnityTransport>().ConnectionData.Port;
+                transport.SetConnectionData(ip, 7777);
                 
-                string msg = $"{{\"type\":\"create-room\",\"hostIP\":\"{ip}\",\"port\":{port}}}";
+                string msg = $"{{\"type\":\"create-room\",\"hostIP\":\"{ip}\",\"port\":7777}}";
                 webSocket.Send(msg);
-            };
+            });
+        };
+        
+        webSocket.OnMessage += (sender, e) => {
+            Debug.Log($"Mensaje recibido: {e.Data}");
             
-            webSocket.OnMessage += (sender, e) => {
-                Debug.Log($"Mensaje recibido: {e.Data}");
+            MainThreadDispatcher.Run(() => {
                 var response = JsonUtility.FromJson<RoomResponse>(e.Data);
-                
-                if (response != null && response.success) {
-                    ExecuteOnMainThread(() => {
-                        // Muestra el código de sala
-                        var root = menuUI.rootVisualElement;
-                        var roomCodeLabel = root.Q<Label>("roomCodeLabel");
-                        var roomCodePanel = root.Q<VisualElement>("roomCodePanel");
-                        
-                        if (roomCodeLabel != null) roomCodeLabel.text = response.roomCode;
-                        if (roomCodePanel != null) roomCodePanel.RemoveFromClassList("hidden");
-                        
-                        // Inicia como host y cambia de escena
-                        netManager.OnClientConnectedCallback += OnHostStarted;
-                        if (!netManager.StartHost())
-                        {
-                            Debug.LogError("Falló al iniciar como host");
-                            isConnecting = false;
-                        }
-                    });
-                }
-                else
+                if (response?.type == "room-created" && response.success)
                 {
-                    Debug.LogError("Respuesta del servidor inválida o fallida");
-                    isConnecting = false;
+                    currentRoomCode = response.roomCode;
+                    
+                    var root = menuUI.rootVisualElement;
+                    root.Q<Label>("roomCodeLabel").text = currentRoomCode;
+                    root.Q<VisualElement>("roomCodePanel").RemoveFromClassList("hidden");
+                    
+                    // Registrar evento antes de iniciar host
+                    NetworkManager.Singleton.OnServerStarted += OnHostStarted;
+                    
+                    if (!NetworkManager.Singleton.StartHost())
+                    {
+                        Debug.LogError("Error al iniciar host");
+                        isConnecting = false;
+                    }
                 }
-            };
-            
-            webSocket.OnError += (sender, e) => {
-                Debug.LogError($"Error WebSocket: {e.Message}");
-                isConnecting = false;
-            };
-            
-            webSocket.OnClose += (sender, e) => {
-                Debug.Log($"Conexión WebSocket cerrada: {e.Reason}");
-                isConnecting = false;
-            };
-            
-            webSocket.Connect();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error al crear partida: {e.Message}");
+            });
+        };
+        
+        webSocket.OnError += (sender, e) => {
+            Debug.LogError($"Error WebSocket: {e.Message}");
             isConnecting = false;
-        }
+        };
+        
+        webSocket.Connect();
     }
 
     private void JoinGame(string roomCode)
@@ -201,94 +131,106 @@ public class OnlineMatchmaker : MonoBehaviour
         if (isConnecting) return;
         
         isConnecting = true;
-        Debug.Log($"Intentando unirse a partida con código: {roomCode}");
+        Debug.Log($"Uniéndose a partida: {roomCode}");
+
+        InitializeNetworkConnection();
         
-        try
-        {
-            webSocket = new WebSocket(serverUrl);
+        // Configurar el NetworkManager para manejar escenas
+        NetworkManager.Singleton.SceneManager.SetClientSynchronizationMode(LoadSceneMode.Single);
+        
+        webSocket = new WebSocket(serverUrl);
+        
+        webSocket.OnOpen += (sender, e) => {
+            Debug.Log("Conexión WebSocket establecida (Client)");
             
-            webSocket.OnOpen += (sender, e) => {
-                Debug.Log("Conexión WebSocket establecida (Client)");
+            MainThreadDispatcher.Run(() => {
                 string msg = $"{{\"type\":\"join-room\",\"roomCode\":\"{roomCode}\",\"playerIP\":\"{GetLocalIP()}\"}}";
                 webSocket.Send(msg);
-            };
+            });
+        };
+        
+        webSocket.OnMessage += (sender, e) => {
+            Debug.Log($"Mensaje recibido: {e.Data}");
             
-            webSocket.OnMessage += (sender, e) => {
-                Debug.Log($"Mensaje recibido: {e.Data}");
+            MainThreadDispatcher.Run(() => {
                 var response = JsonUtility.FromJson<JoinResponse>(e.Data);
-                
-                if (response != null && response.success) {
-                    ExecuteOnMainThread(() => {
-                        // Configura la conexión al host
-                        var transport = netManager.GetComponent<UnityTransport>();
-                        transport.SetConnectionData(response.hostIP, (ushort)response.port);
-                        
-                        // Inicia como cliente
-                        netManager.OnClientConnectedCallback += OnClientConnected;
-                        if (!netManager.StartClient())
-                        {
-                            Debug.LogError("Falló al iniciar como cliente");
-                            isConnecting = false;
-                        }
-                    });
+                if (response?.type == "join-response" && response.success)
+                {
+                    var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+                    transport.SetConnectionData(response.hostIP, (ushort)response.port);
+                    
+                    // Registrar evento antes de iniciar cliente
+                    NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+                    
+                    if (!NetworkManager.Singleton.StartClient())
+                    {
+                        Debug.LogError("Error al iniciar cliente");
+                        isConnecting = false;
+                    }
                 }
                 else
                 {
-                    Debug.LogError("No se pudo unir a la partida: " + (response?.message ?? "Respuesta inválida"));
+                    Debug.LogError($"Error al unirse: {response?.message ?? "Respuesta inválida"}");
                     isConnecting = false;
                 }
-            };
-            
-            webSocket.OnError += (sender, e) => {
-                Debug.LogError($"Error WebSocket: {e.Message}");
-                isConnecting = false;
-            };
-            
-            webSocket.OnClose += (sender, e) => {
-                Debug.Log($"Conexión WebSocket cerrada: {e.Reason}");
-                isConnecting = false;
-            };
-            
-            webSocket.Connect();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error al unirse a partida: {e.Message}");
+            });
+        };
+        
+        webSocket.OnError += (sender, e) => {
+            Debug.LogError($"Error WebSocket: {e.Message}");
             isConnecting = false;
+        };
+        
+        webSocket.Connect();
+    }
+
+    private void InitializeNetworkConnection()
+    {
+        if (NetworkManager.Singleton == null && networkManagerPrefab != null)
+        {
+            spawnedNetworkManager = Instantiate(networkManagerPrefab);
+            DontDestroyOnLoad(spawnedNetworkManager.gameObject);
         }
     }
 
-    private void OnHostStarted(ulong clientId)
+    private void OnHostStarted()
     {
-        if (clientId == netManager.LocalClientId) {
-            Debug.Log("Host iniciado correctamente");
-            netManager.OnClientConnectedCallback -= OnHostStarted;
-            LoadGameScene();
+        Debug.Log("Host iniciado, cargando escena Game...");
+        
+        // Desregistrar el evento primero para evitar múltiples llamadas
+        NetworkManager.Singleton.OnServerStarted -= OnHostStarted;
+        
+        // Cargar la escena Game para todos los clientes
+        NetworkManager.Singleton.SceneManager.LoadScene("Game", LoadSceneMode.Single);
+        
+        // Ocultar la UI del menú
+        if (menuUI != null && menuUI.rootVisualElement != null)
+        {
+            menuUI.rootVisualElement.visible = false;
         }
     }
 
     private void OnClientConnected(ulong clientId)
     {
-        Debug.Log("Cliente conectado al host");
-        netManager.OnClientConnectedCallback -= OnClientConnected;
-        LoadGameScene();
-    }
-
-    private void LoadGameScene()
-    {
-        if (menuUI != null && menuUI.rootVisualElement != null)
+        if (clientId == NetworkManager.Singleton.LocalClientId)
         {
-            menuUI.rootVisualElement.visible = false;
+            Debug.Log("Cliente conectado, esperando cambio de escena...");
+            
+            // Desregistrar el evento
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
+            
+            // Ocultar la UI del menú
+            if (menuUI != null && menuUI.rootVisualElement != null)
+            {
+                menuUI.rootVisualElement.visible = false;
+            }
         }
         
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
+        // Solo el servidor instancia jugadores
+        if (NetworkManager.Singleton.IsServer && playerPrefab != null)
         {
-            NetworkManager.Singleton.SceneManager.LoadScene("Game", LoadSceneMode.Single);
-        }
-        else
-        {
-            Debug.LogError("NetworkManager o SceneManager no disponible para cambiar de escena");
-            SceneManager.LoadScene("Game");
+            var player = Instantiate(playerPrefab);
+            player.GetComponent<NetworkObject>().SpawnWithOwnership(clientId);
         }
     }
 
@@ -297,58 +239,44 @@ public class OnlineMatchmaker : MonoBehaviour
         try
         {
             var host = Dns.GetHostEntry(Dns.GetHostName());
-            foreach (var ip in host.AddressList) {
-                if (ip.AddressFamily == AddressFamily.InterNetwork) {
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
                     return ip.ToString();
                 }
             }
         }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error obteniendo IP local: {e.Message}");
-        }
+        catch { }
         return "127.0.0.1";
     }
 
-    private void ExecuteOnMainThread(System.Action action)
+    public override void OnDestroy()
     {
-        if (action == null) return;
+        base.OnDestroy();
         
-        #if UNITY_WSA && !UNITY_EDITOR
-        UnityEngine.WSA.Application.InvokeOnAppThread(() => action(), false);
-        #else
-        action();
-        #endif
-    }
-
-    private void OnDestroy()
-    {
-        try
+        if (webSocket != null)
         {
-            if (webSocket != null && webSocket.IsAlive)
-            {
-                webSocket.Close();
-            }
-            
-            if (netManager != null) {
-                netManager.OnClientConnectedCallback -= OnHostStarted;
-                netManager.OnClientConnectedCallback -= OnClientConnected;
-            }
+            if (webSocket.IsAlive) webSocket.Close();
+            webSocket = null;
         }
-        catch (System.Exception e)
+        
+        if (spawnedNetworkManager != null)
         {
-            Debug.LogError($"Error en OnDestroy: {e.Message}");
+            Destroy(spawnedNetworkManager.gameObject);
         }
     }
 
     [System.Serializable]
     private class RoomResponse {
+        public string type;
         public bool success;
         public string roomCode;
     }
     
     [System.Serializable]
     private class JoinResponse {
+        public string type;
         public bool success;
         public string message;
         public string hostIP;
